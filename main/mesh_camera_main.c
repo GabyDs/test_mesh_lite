@@ -15,6 +15,7 @@
 #include "esp_wifi.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "cJSON.h"
 
 #include "esp_bridge.h"
 #include "esp_mesh_lite.h"
@@ -29,11 +30,43 @@ static const char *TAG = "mesh_camera";
 #endif
 
 // PIR Sensor GPIO (only for leaf/camera nodes)
-#define PIR_SENSOR_GPIO     GPIO_NUM_12
-#define ESP_INTR_FLAG_DEFAULT 0
+#define PIR_SENSOR_GPIO         GPIO_NUM_12
+#define ESP_INTR_FLAG_DEFAULT   0
+#define PIR_DEBOUNCE_MS         3000  // Debounce time in milliseconds (ignore events within this period)
+
+// Message types for mesh communication
+#define MSG_TYPE_PIR_ALERT    "pir_alert"
 
 // Queue for PIR events
 static QueueHandle_t pir_evt_queue = NULL;
+
+// Last PIR trigger timestamp for debounce
+static uint32_t last_pir_trigger_time = 0;
+
+#if IS_ROOT_NODE
+/**
+ * @brief Handler for PIR alert messages received from camera nodes (ROOT only)
+ */
+static cJSON* pir_alert_process(cJSON *payload, uint32_t seq)
+{
+    cJSON *src_mac = cJSON_GetObjectItem(payload, "src_mac");
+    
+    if (src_mac && cJSON_IsString(src_mac)) {
+        ESP_LOGW(TAG, "ALERT: Motion detected from camera [%s]", src_mac->valuestring);
+    } else {
+        ESP_LOGW(TAG, "ALERT: Motion detected from unknown camera");
+    }
+    
+    // Return NULL - no response needed
+    return NULL;
+}
+
+// Message action table for ROOT node
+static const esp_mesh_lite_msg_action_t root_msg_action[] = {
+    {MSG_TYPE_PIR_ALERT, NULL, pir_alert_process},
+    {NULL, NULL, NULL} // End marker
+};
+#endif
 
 /**
  * @brief PIR sensor interrupt handler
@@ -44,15 +77,79 @@ static void IRAM_ATTR pir_isr_handler(void *arg)
     xQueueSendFromISR(pir_evt_queue, &gpio_num, NULL);
 }
 
+#if !IS_ROOT_NODE
 /**
- * @brief Task to handle PIR sensor events
+ * @brief Resend function for PIR alert
+ */
+static esp_err_t pir_alert_resend(const char* payload)
+{
+    return esp_mesh_lite_send_msg_to_root(payload);
+}
+
+/**
+ * @brief Send PIR alert to root node
+ */
+static void send_pir_alert_to_root(void)
+{
+    uint8_t sta_mac[6] = {0};
+    char mac_str[18];
+    
+    esp_wifi_get_mac(ESP_IF_WIFI_STA, sta_mac);
+    snprintf(mac_str, sizeof(mac_str), MACSTR, MAC2STR(sta_mac));
+    
+    // Create JSON payload
+    cJSON *req_payload = cJSON_CreateObject();
+    cJSON_AddStringToObject(req_payload, "src_mac", mac_str);
+    cJSON_AddNumberToObject(req_payload, "timestamp", esp_log_timestamp());
+    
+    // Configure and send message using mesh_lite API
+    esp_mesh_lite_msg_config_t config = {
+        .json_msg = {
+            .send_msg = MSG_TYPE_PIR_ALERT,
+            .expect_msg = NULL,  // No response expected
+            .max_retry = 3,
+            .retry_interval = 1000,
+            .req_payload = req_payload,
+            .resend = pir_alert_resend,
+            .send_fail = NULL,
+        }
+    };
+    
+    esp_err_t ret = esp_mesh_lite_send_msg(ESP_MESH_LITE_JSON_MSG, &config);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "PIR alert sent to root [%s]", mac_str);
+    } else {
+        ESP_LOGE(TAG, "Failed to send PIR alert: %s", esp_err_to_name(ret));
+    }
+    
+    cJSON_Delete(req_payload);
+}
+#endif
+
+/**
+ * @brief Task to handle PIR sensor events with debounce
  */
 static void pir_task(void *arg)
 {
     uint32_t gpio_num;
     for (;;) {
         if (xQueueReceive(pir_evt_queue, &gpio_num, portMAX_DELAY)) {
+            uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+            
+            // Check debounce: ignore if within debounce period
+            if ((current_time - last_pir_trigger_time) < PIR_DEBOUNCE_MS) {
+                ESP_LOGD(TAG, "PIR event ignored (debounce). Time since last: %"PRIu32" ms", 
+                         current_time - last_pir_trigger_time);
+                continue;
+            }
+            
+            // Update last trigger time
+            last_pir_trigger_time = current_time;
+            
             ESP_LOGI(TAG, "PIR SENSOR TRIGGERED! Motion detected on GPIO %"PRIu32, gpio_num);
+#if !IS_ROOT_NODE
+            send_pir_alert_to_root();
+#endif
         }
     }
 }
@@ -227,6 +324,11 @@ void app_main()
 
     esp_mesh_lite_config_t mesh_lite_config = ESP_MESH_LITE_DEFAULT_INIT();
     esp_mesh_lite_init(&mesh_lite_config);
+
+#if IS_ROOT_NODE
+    // Register message handler for PIR alerts from camera nodes BEFORE starting mesh
+    esp_mesh_lite_msg_action_list_register(root_msg_action);
+#endif
 
     app_wifi_set_softap_info();
 
