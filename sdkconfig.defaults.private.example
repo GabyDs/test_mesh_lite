@@ -1,0 +1,13 @@
+# WiFi Configuration - COPY THIS FILE TO sdkconfig.defaults.private
+# This file should NOT be committed to git
+#
+# After copying, edit with your actual credentials:
+#   cp sdkconfig.defaults.private.example sdkconfig.defaults.private
+
+# Router/External WiFi credentials (the network the root node connects to)
+CONFIG_ROUTER_SSID="YOUR_WIFI_SSID"
+CONFIG_ROUTER_PASSWORD="YOUR_WIFI_PASSWORD"
+
+# Mesh SoftAP credentials (used for mesh internal communication)
+CONFIG_BRIDGE_SOFTAP_SSID="ESP_Bridge"
+CONFIG_BRIDGE_SOFTAP_PASSWORD="mesh_password_123"

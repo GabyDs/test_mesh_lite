@@ -10,9 +10,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include "freertos/queue.h"
 
 #include "esp_wifi.h"
 #include "nvs_flash.h"
+#include "driver/gpio.h"
 
 #include "esp_bridge.h"
 #include "esp_mesh_lite.h"
@@ -25,6 +27,67 @@ static const char *TAG = "mesh_camera";
 #else
 #define IS_ROOT_NODE false
 #endif
+
+// PIR Sensor GPIO (only for leaf/camera nodes)
+#define PIR_SENSOR_GPIO     GPIO_NUM_12
+#define ESP_INTR_FLAG_DEFAULT 0
+
+// Queue for PIR events
+static QueueHandle_t pir_evt_queue = NULL;
+
+/**
+ * @brief PIR sensor interrupt handler
+ */
+static void IRAM_ATTR pir_isr_handler(void *arg)
+{
+    uint32_t gpio_num = (uint32_t)arg;
+    xQueueSendFromISR(pir_evt_queue, &gpio_num, NULL);
+}
+
+/**
+ * @brief Task to handle PIR sensor events
+ */
+static void pir_task(void *arg)
+{
+    uint32_t gpio_num;
+    for (;;) {
+        if (xQueueReceive(pir_evt_queue, &gpio_num, portMAX_DELAY)) {
+            ESP_LOGI(TAG, "PIR SENSOR TRIGGERED! Motion detected on GPIO %"PRIu32, gpio_num);
+        }
+    }
+}
+
+/**
+ * @brief Initialize PIR sensor GPIO (only for camera/leaf nodes)
+ */
+static void pir_sensor_init(void)
+{
+    ESP_LOGI(TAG, "Initializing PIR sensor on GPIO %d", PIR_SENSOR_GPIO);
+
+    // Configure GPIO
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_POSEDGE,     // Interrupt on rising edge
+        .mode = GPIO_MODE_INPUT,             // Input mode
+        .pin_bit_mask = (1ULL << PIR_SENSOR_GPIO),
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+    };
+    gpio_config(&io_conf);
+
+    // Create queue for PIR events
+    pir_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+
+    // Create task to handle PIR events
+    xTaskCreate(pir_task, "pir_task", 2048, NULL, 10, NULL);
+
+    // Install GPIO ISR service
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+
+    // Hook ISR handler for specific GPIO
+    gpio_isr_handler_add(PIR_SENSOR_GPIO, pir_isr_handler, (void *)PIR_SENSOR_GPIO);
+
+    ESP_LOGI(TAG, "PIR sensor initialized - waiting for motion...");
+}
 
 /**
  * @brief Timed printing system information
@@ -181,6 +244,9 @@ void app_main()
     ESP_LOGI(TAG, "║  MESH CAMERA SYSTEM - CAMERA NODE      ║");
     ESP_LOGI(TAG, "║  Connecting to mesh network...         ║");
     ESP_LOGI(TAG, "╚════════════════════════════════════════╝");
+
+    // Initialize PIR sensor for camera nodes only
+    pir_sensor_init();
 #endif
 
     TimerHandle_t timer = xTimerCreate("print_system_info", 10000 / portTICK_PERIOD_MS,

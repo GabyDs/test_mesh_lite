@@ -2,6 +2,10 @@
 build/
 sdkconfig.old
 
+# Private configuration (WiFi credentials)
+sdkconfig.defaults.private
+sdkconfig
+
 # Generated files
 sdkconfig.ci
 sdkconfig.*.old
