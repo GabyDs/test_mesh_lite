@@ -1,0 +1,34 @@
+menu "Mesh Camera Configuration"
+
+choice NODE_ROLE
+    prompt "Node Role"
+    default NODE_ROLE_CAMERA
+    help
+        Select the role of this node in the mesh network.
+
+    config NODE_ROLE_ROOT
+        bool "Root Node (Gateway/Server)"
+        help
+            This node will act as the root/gateway that connects to the router
+            and receives data from camera nodes.
+
+    config NODE_ROLE_CAMERA
+        bool "Camera Node (Leaf)"
+        help
+            This node will act as a camera that captures and sends images
+            through the mesh network to the root node.
+endchoice
+
+config ROUTER_SSID
+    string "Router SSID"
+        default "ROUTER_SSID"
+        help
+            Router SSID.
+
+config ROUTER_PASSWORD
+    string "Router password"
+        default "ROUTER_PASSWORD"
+        help
+            Router password.
+
+endmenu

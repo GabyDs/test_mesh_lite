@@ -1,0 +1,51 @@
+# Build output
+build/
+sdkconfig.old
+
+# Generated files
+sdkconfig.ci
+sdkconfig.*.old
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Managed components (downloaded dependencies)
+managed_components/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Debug files
+*.dmp
+
+# Compiled files
+*.o
+*.obj
+*.elf
+*.bin
+*.map
+
+# Archive files
+*.tar.gz
+*.zip
+
+# ESP-IDF specific
+dependencies.lock
